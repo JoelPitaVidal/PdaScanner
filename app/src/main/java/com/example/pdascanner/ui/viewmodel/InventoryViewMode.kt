@@ -27,33 +27,64 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         InventoryRepository(it.albaranDao(), it.fotoDao())
     }
 
-    // 1. FUNCIÓN PRINCIPAL: Procesa todo tras la captura
+    // Estados de la pantalla
+    sealed class ScanState {
+        object Idle : ScanState()
+        object Buscando : ScanState()
+        data class Valido(val codigo: String) : ScanState()
+        data class Error(val mensaje: String) : ScanState()
+        // Ahora Guardado incluye el nombre del archivo y el total de fotos
+        data class Guardado(val nombre: String, val totalFotos: Int, val qr: String) : ScanState()
+    }
+
+    val estadoEscaneo = MutableLiveData<ScanState>(ScanState.Idle)
+
+    // 1. FUNCIÓN PRINCIPAL: Procesa la captura y el conteo
     fun procesarCaptura(nombreArchivo: String, qr: String, uri: Uri?) {
         viewModelScope.launch(Dispatchers.IO) {
-            // A. Guardar en Base de Datos Local (Room)
-            val pathLocal = uri?.toString() ?: ""
-            val nuevaFoto = Foto(
-                albaranId = 0,
-                nombreFichero = nombreArchivo,
-                qrCodigo = qr,
-                fecha = System.currentTimeMillis(),
-                uri = pathLocal
-            )
-            repository.guardarFoto(nuevaFoto)
+            try {
+                // A. GUARDAR LOCALMENTE (Siempre primero)
+                val nuevaFoto = Foto(
+                    albaranId = 0,
+                    nombreFichero = nombreArchivo,
+                    qrCodigo = qr,
+                    fecha = System.currentTimeMillis(),
+                    uri = uri?.toString() ?: "",
+                    subida = false
+                )
 
-            // B. Intentar subir al servidor si hay URI
-            uri?.let {
-                val archivo = uriToFile(it)
-                if (archivo != null) {
-                    subirFotoServidor(archivo, qr, nombreArchivo)
+                val idGenerado = repository.guardarFoto(nuevaFoto)
+
+                // B. OBTENER CONTEO ACTUALIZADO
+                // Consultamos a la DB cuántas fotos tiene ya este QR
+                val totalFotos = repository.getConteoFotos(qr)
+
+                // C. NOTIFICAR A LA UI (Actualizamos el mensaje con el contador)
+                estadoEscaneo.postValue(ScanState.Guardado(nombreArchivo, totalFotos, qr))
+
+                // D. INTENTAR SUBIDA AL SERVIDOR
+                uri?.let {
+                    val archivo = uriToFile(it)
+                    if (archivo != null) {
+                        val exito = subirFotoServidor(archivo, qr, nombreArchivo)
+                        if (exito) {
+                            repository.marcarFotoComoSubida(idGenerado.toInt())
+                            Log.d("SYNC", "Foto $idGenerado sincronizada correctamente")
+                        } else {
+                            Log.e("SYNC", "Foto $idGenerado guardada solo en local (Fallo servidor/red)")
+                        }
+                    }
                 }
+            } catch (e: Exception) {
+                Log.e("PROCESS", "Error procesando captura: ${e.message}")
+                estadoEscaneo.postValue(ScanState.Error("Error al guardar: ${e.message}"))
             }
         }
     }
 
     // 2. LÓGICA DE RED (API)
-    private suspend fun subirFotoServidor(archivo: File, qr: String, nombre: String) {
-        try {
+    private suspend fun subirFotoServidor(archivo: File, qr: String, nombre: String): Boolean {
+        return try {
             val requestFile = archivo.asRequestBody("image/jpeg".toMediaTypeOrNull())
             val body = MultipartBody.Part.createFormData("foto", archivo.name, requestFile)
             val qrBody = qr.toRequestBody("text/plain".toMediaTypeOrNull())
@@ -61,49 +92,14 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
             val response = RetrofitClient.instance.subirImagen(body, qrBody, nombreBody)
 
-            if (response.isSuccessful && response.body()?.success == true) {
-                Log.d("API", "Enviado con éxito: ${response.body()?.message}")
-            }
+            response.isSuccessful && response.body()?.success == true
         } catch (e: Exception) {
-            Log.e("API", "Fallo en la sincronización: ${e.message}")
+            Log.e("API", "Error en subida: ${e.message}")
+            false
         }
     }
 
-    // 3. UTILIDAD: Convierte Uri a File (Necesario para Retrofit)
-    private fun uriToFile(uri: Uri): File? {
-        return try {
-            val context = getApplication<Application>().applicationContext
-            val inputStream = context.contentResolver.openInputStream(uri)
-            val file = File(context.cacheDir, "upload_temp.jpg")
-            val outputStream = FileOutputStream(file)
-            inputStream?.copyTo(outputStream)
-            inputStream?.close()
-            outputStream.close()
-            file
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    fun buscarAlbaranPorTransporte(at: String, callback: (Albaran?) -> Unit) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val resultado = repository.obtenerAlbaranPorTransporte(at)
-            withContext(Dispatchers.Main) { callback(resultado) }
-        }
-    }
-
-    // Dentro de InventoryViewModel.kt
-    sealed class ScanState {
-        object Idle : ScanState()
-        object Buscando : ScanState()
-        data class Valido(val codigo: String) : ScanState()
-        data class Error(val mensaje: String) : ScanState()
-        data class Guardado(val nombre: String) : ScanState()
-    }
-
-    // En el ViewModel añade:
-    val estadoEscaneo = MutableLiveData<ScanState>(ScanState.Idle)
-
+    // 3. PROCESAR CÓDIGOS QR
     fun procesarCodigo(codigo: String) {
         val limpio = codigo.trim().uppercase()
         estadoEscaneo.postValue(ScanState.Buscando)
@@ -127,4 +123,25 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    private fun buscarAlbaranPorTransporte(at: String, callback: (Albaran?) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val resultado = repository.obtenerAlbaranPorTransporte(at)
+            withContext(Dispatchers.Main) { callback(resultado) }
+        }
+    }
+
+    private fun uriToFile(uri: Uri): File? {
+        return try {
+            val context = getApplication<Application>().applicationContext
+            val inputStream = context.contentResolver.openInputStream(uri)
+            val file = File(context.cacheDir, "upload_temp.jpg")
+            val outputStream = FileOutputStream(file)
+            inputStream?.copyTo(outputStream)
+            inputStream?.close()
+            outputStream.close()
+            file
+        } catch (e: Exception) {
+            null
+        }
+    }
 }

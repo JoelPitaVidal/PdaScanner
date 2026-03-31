@@ -54,7 +54,9 @@ class MainActivity : AppCompatActivity() {
                     actualizarUI(estado.mensaje, Color.RED, false)
                 }
                 is ScanState.Guardado -> {
-                    actualizarUI("GUARDADO: ${estado.nombre}", Color.GREEN, false)
+                    // Ahora 'estado' contiene: nombre, totalFotos y qr
+                    val mensaje = "FOTO ${estado.totalFotos} GUARDADA (${estado.qr})"
+                    actualizarUI(mensaje, Color.parseColor("#2E7D32"), false) // Un verde más oscuro
                     vibrar(50)
                 }
                 else -> {}
@@ -86,9 +88,12 @@ class MainActivity : AppCompatActivity() {
         if (isProcessing) return
 
         actualizarUI("PROCESANDO...", Color.YELLOW, true)
+
         cameraManager.takePhoto(qr, { name, uri ->
+            // Solo llamamos a procesar. El ViewModel se encarga de
+            // guardar, contar y avisar a la UI cuando termine.
             inventoryViewModel.procesarCaptura(name, qr, uri)
-            inventoryViewModel.estadoEscaneo.postValue(ScanState.Guardado(name))
+
         }, { err ->
             inventoryViewModel.estadoEscaneo.postValue(ScanState.Error(err))
         })

@@ -10,7 +10,7 @@ import com.example.pdascanner.localdatabase.Foto
 import com.example.pdascanner.localdatabase.Albaran
 
 // 1. Definimos las entidades y la versión
-@Database(entities = [Albaran::class, Foto::class], version = 2)
+@Database(entities = [Albaran::class, Foto::class], version = 3)
 abstract class AppDatabase : RoomDatabase() {
 
     // 2. Conectamos los DAOs

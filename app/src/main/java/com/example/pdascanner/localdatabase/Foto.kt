@@ -10,5 +10,6 @@ data class Foto(
     val nombreFichero: String,
     val qrCodigo: String,
     val fecha: Long,
-    val uri: String
+    val uri: String,
+    val subida: Boolean = false
 )
