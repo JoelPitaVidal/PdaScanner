@@ -1,67 +1,117 @@
 package com.example.pdascanner
 
-import android.Manifest
-import android.content.pm.PackageManager
+import android.content.pm.ActivityInfo
+import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
-import android.widget.TextView
-import android.widget.Toast
+import android.view.KeyEvent
+import androidx.activity.viewModels
+import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
-import androidx.camera.view.LifecycleCameraController
-import androidx.camera.view.PreviewView
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
-import com.example.pdascanner.barcodeanalyzer.BarcodeAnalyzer
+import com.example.pdascanner.cameraManager.CameraManager
+import com.example.pdascanner.databinding.ActivityMainBinding
+import com.example.pdascanner.permissionmanager.PermissionManager
+import com.example.pdascanner.ui.viewmodel.InventoryViewModel
+import com.example.pdascanner.ui.viewmodel.InventoryViewModel.ScanState
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var viewFinder: PreviewView
-    private lateinit var txtResultado: TextView
-    private lateinit var cameraController: LifecycleCameraController
+    // Usamos ViewBinding para eliminar los findViewById
+    private lateinit var binding: ActivityMainBinding
+    private lateinit var cameraManager: CameraManager
 
+    // Kotlin permite inicializar el ViewModel en una línea
+    private val inventoryViewModel: InventoryViewModel by viewModels()
+
+    private var lastQr: String? = null
+    private var isProcessing: Boolean = false
+
+    @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
+        binding = ActivityMainBinding.inflate(layoutInflater)
+        setContentView(binding.root)
 
-        viewFinder = findViewById(R.id.previewView)
-        txtResultado = findViewById(R.id.txtResultado)
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        cameraManager = CameraManager(this, binding.previewView)
 
-        if (allPermissionsGranted()) {
-            setupCamera()
-        } else {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 10)
-        }
+        setupObservers()
+        checkPermissions()
     }
 
-    private fun setupCamera() {
-        cameraController = LifecycleCameraController(baseContext)
-
-        // Usamos nuestra nueva clase separada
-        cameraController.setImageAnalysisAnalyzer(
-            ContextCompat.getMainExecutor(this),
-            BarcodeAnalyzer { resultado ->
-                txtResultado.text = "Contenido: $resultado"
+    @RequiresApi(Build.VERSION_CODES.O)
+    private fun setupObservers() {
+        inventoryViewModel.estadoEscaneo.observe(this) { estado ->
+            when (estado) {
+                is ScanState.Buscando -> actualizarUI("Buscando...", Color.BLUE, true)
+                is ScanState.Valido -> {
+                    lastQr = estado.codigo
+                    actualizarUI("LISTO: ${estado.codigo}", Color.parseColor("#4CAF50"), false)
+                    vibrar(100)
+                }
+                is ScanState.Error -> {
+                    lastQr = null
+                    actualizarUI(estado.mensaje, Color.RED, false)
+                }
+                is ScanState.Guardado -> {
+                    actualizarUI("GUARDADO: ${estado.nombre}", Color.GREEN, false)
+                    vibrar(50)
+                }
+                else -> {}
             }
-        )
-
-        cameraController.bindToLifecycle(this)
-        viewFinder.controller = cameraController
-
-        // Aplicamos el arreglo de la cámara invertida
-        viewFinder.post {
-            viewFinder.scaleX = -1f
-            viewFinder.scaleY = -1f
         }
     }
 
-    private fun allPermissionsGranted() = ContextCompat.checkSelfPermission(
-        baseContext, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 10 && allPermissionsGranted()) {
-            setupCamera()
-        } else {
-            Toast.makeText(this, "Permiso denegado", Toast.LENGTH_SHORT).show()
+    private fun actualizarUI(msg: String, color: Int, processing: Boolean) {
+        binding.txtResultado.apply {
+            text = msg
+            setBackgroundColor(color)
         }
+        isProcessing = processing
+    }
+
+    private fun checkPermissions() {
+        val pm = PermissionManager(this)
+        if (pm.allPermissionsGranted()) startFlow() else pm.requestPermissions(10)
+    }
+
+    private fun startFlow() {
+        cameraManager.setupCamera(this) { qr ->
+            if (lastQr != qr.trim().uppercase()) inventoryViewModel.procesarCodigo(qr)
+        }
+    }
+
+    private fun ejecutarCaptura() {
+        val qr = lastQr ?: return
+        if (isProcessing) return
+
+        actualizarUI("PROCESANDO...", Color.YELLOW, true)
+        cameraManager.takePhoto(qr, { name, uri ->
+            inventoryViewModel.procesarCaptura(name, qr, uri)
+            inventoryViewModel.estadoEscaneo.postValue(ScanState.Guardado(name))
+        }, { err ->
+            inventoryViewModel.estadoEscaneo.postValue(ScanState.Error(err))
+        })
+    }
+
+    // Extraemos la lógica de detección de gatillos para que sea más legible
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        val esGatilloPushed = when (keyCode) {
+            131, 285, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_CAMERA -> true
+            else -> false
+        }
+
+        if (esGatilloPushed && lastQr != null) {
+            ejecutarCaptura()
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    private fun vibrar(ms: Long) {
+        val v = getSystemService(VIBRATOR_SERVICE) as android.os.Vibrator
+        val effect = android.os.VibrationEffect.createOneShot(ms, android.os.VibrationEffect.DEFAULT_AMPLITUDE)
+        v.vibrate(effect)
     }
 }

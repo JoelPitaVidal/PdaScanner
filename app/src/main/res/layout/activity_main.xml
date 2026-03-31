@@ -8,7 +8,7 @@
     android:background="#000000"
     tools:context=".MainActivity">
 
-    <!-- Vista de la cámara -->
+    <!-- Vista de la cámara: Ocupa toda la pantalla -->
     <androidx.camera.view.PreviewView
         android:id="@+id/previewView"
         android:layout_width="match_parent"
@@ -18,7 +18,10 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
-    <!-- Overlay de resultado (Texto sobre la cámara) -->
+    <!--
+       Se ha eliminado el Button 'btnCapture'.
+       El TextView ahora se ancla al fondo de la pantalla (parent)
+    -->
     <TextView
         android:id="@+id/txtResultado"
         android:layout_width="0dp"
