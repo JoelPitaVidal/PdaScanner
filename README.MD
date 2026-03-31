@@ -58,8 +58,7 @@ Este proyecto incluye correcciones y optimizaciones específicas para dispositiv
 
 *   **Inversión de Sensor**: Implementación de una corrección de **180°** en el `PreviewView`. Esto soluciona el problema común en terminales industriales donde los sensores de cámara están montados de forma invertida respecto al chasis.
 *   **Mapeo de Gatillos Físicos**: Intercepción de `KeyCodes` específicos para permitir el disparo de la cámara mediante los botones físicos del dispositivo:
-    *   `131`: Gatillo lateral izquierdo (L-Scan).
-    *   `285`: Gatillo lateral derecho (R-Scan).
+    *   `131`: Gatill
     *   `KeyEvent.KEYCODE_ENTER`: Gatillo central o empuñadura de pistola.
 *   **Ahorro de Energía**: El ciclo de vida de la cámara está estrictamente ligado al de la `MainActivity` mediante *Lifecycle-Aware components*, liberando el hardware de captura inmediatamente cuando la app pasa a segundo plano para maximizar la autonomía de la batería.
 
