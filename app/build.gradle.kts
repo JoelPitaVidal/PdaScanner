@@ -46,6 +46,10 @@ android {
 
 dependencies {
 
+    implementation(libs.androidx.work.runtime.ktx)
+    val work_version = "2.8.1"
+    implementation("androidx.work:work-runtime-ktx:$work_version")
+
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
     // OkHttp para el log de errores de red (opcional pero muy recomendado)

@@ -22,4 +22,6 @@ interface FotoDao {
     // Cambia qr_asociado por qrCodigo (o como lo hayas nombrado en Foto.kt)
     @Query("SELECT COUNT(*) FROM fotos WHERE qrCodigo = :qr")
     suspend fun contarFotosPorQr(qr: String): Int
+
+
 }

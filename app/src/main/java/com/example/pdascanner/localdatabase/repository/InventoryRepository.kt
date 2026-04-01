@@ -44,4 +44,8 @@ class InventoryRepository(
     suspend fun getConteoFotos(qr: String): Int {
         return fotoDao.contarFotosPorQr(qr)
     }
+
+    suspend fun obtenerFotosNoSubidas(): List<Foto> {
+        return fotoDao.obtenerPendientesDeSubida()
+    }
 }

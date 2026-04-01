@@ -8,19 +8,24 @@ import android.view.KeyEvent
 import androidx.activity.viewModels
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
+import androidx.work.Constraints
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
 import com.example.pdascanner.cameraManager.CameraManager
+import com.example.pdascanner.cameraManager.SyncWorker
 import com.example.pdascanner.databinding.ActivityMainBinding
 import com.example.pdascanner.permissionmanager.PermissionManager
 import com.example.pdascanner.ui.viewmodel.InventoryViewModel
 import com.example.pdascanner.ui.viewmodel.InventoryViewModel.ScanState
+import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
 
-    // Usamos ViewBinding para eliminar los findViewById
     private lateinit var binding: ActivityMainBinding
     private lateinit var cameraManager: CameraManager
 
-    // Kotlin permite inicializar el ViewModel en una línea
     private val inventoryViewModel: InventoryViewModel by viewModels()
 
     private var lastQr: String? = null
@@ -37,6 +42,29 @@ class MainActivity : AppCompatActivity() {
 
         setupObservers()
         checkPermissions()
+
+        // Iniciamos el sistema de reintentos automáticos en segundo plano
+        configurarWorkManager()
+    }
+
+    /**
+     * Configura el Worker para que revise fotos pendientes cada 15 minutos
+     * siempre que haya conexión a internet.
+     */
+    private fun configurarWorkManager() {
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+
+        val syncRequest = PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES)
+            .setConstraints(constraints)
+            .build()
+
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            "SyncFotos",
+            ExistingPeriodicWorkPolicy.KEEP, // Si ya hay uno programado, no lo pisa
+            syncRequest
+        )
     }
 
     @RequiresApi(Build.VERSION_CODES.O)
@@ -54,9 +82,9 @@ class MainActivity : AppCompatActivity() {
                     actualizarUI(estado.mensaje, Color.RED, false)
                 }
                 is ScanState.Guardado -> {
-                    // Ahora 'estado' contiene: nombre, totalFotos y qr
+                    // Feedback visual con el total de fotos del QR actual
                     val mensaje = "FOTO ${estado.totalFotos} GUARDADA (${estado.qr})"
-                    actualizarUI(mensaje, Color.parseColor("#2E7D32"), false) // Un verde más oscuro
+                    actualizarUI(mensaje, Color.parseColor("#2E7D32"), false)
                     vibrar(50)
                 }
                 else -> {}
@@ -79,7 +107,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun startFlow() {
         cameraManager.setupCamera(this) { qr ->
-            if (lastQr != qr.trim().uppercase()) inventoryViewModel.procesarCodigo(qr)
+            // Evitamos procesar el mismo código repetidamente si no ha cambiado
+            if (lastQr != qr.trim().uppercase()) {
+                inventoryViewModel.procesarCodigo(qr)
+            }
         }
     }
 
@@ -90,16 +121,13 @@ class MainActivity : AppCompatActivity() {
         actualizarUI("PROCESANDO...", Color.YELLOW, true)
 
         cameraManager.takePhoto(qr, { name, uri ->
-            // Solo llamamos a procesar. El ViewModel se encarga de
-            // guardar, contar y avisar a la UI cuando termine.
+            // El ViewModel se encarga de: Guardar en Room -> Contar -> Notificar UI -> Intentar subir
             inventoryViewModel.procesarCaptura(name, qr, uri)
-
         }, { err ->
             inventoryViewModel.estadoEscaneo.postValue(ScanState.Error(err))
         })
     }
 
-    // Extraemos la lógica de detección de gatillos para que sea más legible
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         val esGatilloPushed = when (keyCode) {
             131, 285, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_CAMERA -> true

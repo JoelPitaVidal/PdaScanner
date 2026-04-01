@@ -130,13 +130,29 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         return try {
             val context = getApplication<Application>().applicationContext
             val inputStream = context.contentResolver.openInputStream(uri)
+
+            // 1. Decodificamos el InputStream a un objeto Bitmap
+            val bitmap = android.graphics.BitmapFactory.decodeStream(inputStream)
+            inputStream?.close()
+
+            // 2. Creamos el archivo de destino en la caché
             val file = File(context.cacheDir, "upload_temp.jpg")
             val outputStream = FileOutputStream(file)
-            inputStream?.copyTo(outputStream)
-            inputStream?.close()
+
+            // 3. COMPRESIÓN MÁGICA:
+            // Convertimos el bitmap a JPEG con calidad 75 (0-100)
+            // Esto reduce drásticamente el peso manteniendo la legibilidad de textos
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 75, outputStream)
+
+            outputStream.flush()
             outputStream.close()
+
+            // Liberamos memoria del bitmap
+            bitmap.recycle()
+
             file
         } catch (e: Exception) {
+            Log.e("STORAGE", "Error comprimiendo imagen: ${e.message}")
             null
         }
     }
