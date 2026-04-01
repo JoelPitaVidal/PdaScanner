@@ -27,23 +27,37 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         InventoryRepository(it.albaranDao(), it.fotoDao())
     }
 
-    // Estados de la pantalla
     sealed class ScanState {
         object Idle : ScanState()
         object Buscando : ScanState()
         data class Valido(val codigo: String) : ScanState()
         data class Error(val mensaje: String) : ScanState()
-        // Ahora Guardado incluye el nombre del archivo y el total de fotos
         data class Guardado(val nombre: String, val totalFotos: Int, val qr: String) : ScanState()
     }
 
     val estadoEscaneo = MutableLiveData<ScanState>(ScanState.Idle)
 
-    // 1. FUNCIÓN PRINCIPAL: Procesa la captura y el conteo
+    private fun tieneEspacioSuficiente(): Boolean {
+        val path = getApplication<Application>().filesDir
+        val espacioLibreBytes = path.freeSpace
+        val mbLibres = espacioLibreBytes / (1024 * 1024)
+
+        Log.d("STORAGE", "Espacio disponible: $mbLibres MB")
+
+        // Retornamos falso si queda menos de 100MB por seguridad
+        return mbLibres > 100
+    }
+
     fun procesarCaptura(nombreArchivo: String, qr: String, uri: Uri?) {
         viewModelScope.launch(Dispatchers.IO) {
+            // 1. COMPROBACIÓN CRÍTICA DE ESPACIO
+            if (!tieneEspacioSuficiente()) {
+                estadoEscaneo.postValue(ScanState.Error("MEMORIA LLENA: Libera espacio en la PDA"))
+                return@launch
+            }
+
             try {
-                // A. GUARDAR LOCALMENTE (Siempre primero)
+                // A. GUARDAR LOCALMENTE
                 val nuevaFoto = Foto(
                     albaranId = 0,
                     nombreFichero = nombreArchivo,
@@ -54,72 +68,54 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 )
 
                 val idGenerado = repository.guardarFoto(nuevaFoto)
-
-                // B. OBTENER CONTEO ACTUALIZADO
-                // Consultamos a la DB cuántas fotos tiene ya este QR
                 val totalFotos = repository.getConteoFotos(qr)
 
-                // C. NOTIFICAR A LA UI (Actualizamos el mensaje con el contador)
                 estadoEscaneo.postValue(ScanState.Guardado(nombreArchivo, totalFotos, qr))
 
-                // D. INTENTAR SUBIDA AL SERVIDOR
+                // B. INTENTAR SUBIDA AL SERVIDOR
                 uri?.let {
                     val archivo = uriToFile(it)
                     if (archivo != null) {
                         val exito = subirFotoServidor(archivo, qr, nombreArchivo)
                         if (exito) {
                             repository.marcarFotoComoSubida(idGenerado.toInt())
-                            Log.d("SYNC", "Foto $idGenerado sincronizada correctamente")
-                        } else {
-                            Log.e("SYNC", "Foto $idGenerado guardada solo en local (Fallo servidor/red)")
                         }
                     }
                 }
             } catch (e: Exception) {
-                Log.e("PROCESS", "Error procesando captura: ${e.message}")
-                estadoEscaneo.postValue(ScanState.Error("Error al guardar: ${e.message}"))
+                Log.e("PROCESS", "Error: ${e.message}")
+                estadoEscaneo.postValue(ScanState.Error("Error de escritura: ${e.message}"))
             }
         }
     }
 
-    // 2. LÓGICA DE RED (API)
+    // ... (Resto de funciones: subirFotoServidor, procesarCodigo, etc. se mantienen igual)
+
     private suspend fun subirFotoServidor(archivo: File, qr: String, nombre: String): Boolean {
         return try {
             val requestFile = archivo.asRequestBody("image/jpeg".toMediaTypeOrNull())
             val body = MultipartBody.Part.createFormData("foto", archivo.name, requestFile)
             val qrBody = qr.toRequestBody("text/plain".toMediaTypeOrNull())
             val nombreBody = nombre.toRequestBody("text/plain".toMediaTypeOrNull())
-
             val response = RetrofitClient.instance.subirImagen(body, qrBody, nombreBody)
-
             response.isSuccessful && response.body()?.success == true
         } catch (e: Exception) {
-            Log.e("API", "Error en subida: ${e.message}")
             false
         }
     }
 
-    // 3. PROCESAR CÓDIGOS QR
     fun procesarCodigo(codigo: String) {
         val limpio = codigo.trim().uppercase()
         estadoEscaneo.postValue(ScanState.Buscando)
-
         when {
             limpio.startsWith("AT") -> {
                 buscarAlbaranPorTransporte(limpio) { albaran ->
-                    if (albaran != null) {
-                        estadoEscaneo.postValue(ScanState.Valido(albaran.codigoCliente))
-                    } else {
-                        estadoEscaneo.postValue(ScanState.Error("SIN ASOCIACIÓN: $limpio"))
-                    }
+                    if (albaran != null) estadoEscaneo.postValue(ScanState.Valido(albaran.codigoCliente))
+                    else estadoEscaneo.postValue(ScanState.Error("SIN ASOCIACIÓN: $limpio"))
                 }
             }
-            limpio.startsWith("AC") -> {
-                estadoEscaneo.postValue(ScanState.Valido(limpio))
-            }
-            else -> {
-                estadoEscaneo.postValue(ScanState.Error("QR NO VÁLIDO (AT/AC)"))
-            }
+            limpio.startsWith("AC") -> estadoEscaneo.postValue(ScanState.Valido(limpio))
+            else -> estadoEscaneo.postValue(ScanState.Error("QR NO VÁLIDO (AT/AC)"))
         }
     }
 
