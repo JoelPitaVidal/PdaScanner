@@ -1,17 +1,24 @@
 package com.example.pdascanner.localdatabase.repository
 
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.asLiveData
 import com.example.pdascanner.localdatabase.Albaran
 import com.example.pdascanner.localdatabase.AlbaranDao
 import com.example.pdascanner.localdatabase.Foto
 import com.example.pdascanner.localdatabase.FotoDao
-import kotlinx.coroutines.flow.Flow
 
 class InventoryRepository(
     private val albaranDao: AlbaranDao,
     private val fotoDao: FotoDao
 ) {
 
+    // CORREGIDO: Convertimos el Flow del DAO a LiveData usando la extensión '.asLiveData()'
+    val fotosPendientes: LiveData<Int> = fotoDao.observarFotosPendientes().asLiveData()
+
     // --- LÓGICA DE ALBARANES ---
+    suspend fun obtenerAlbaranUniversal(codigo: String): Albaran? {
+        return albaranDao.buscarAlbaranUniversal(codigo)
+    }
 
     suspend fun insertarAlbaran(albaran: Albaran): Long {
         return albaranDao.insert(albaran)
@@ -24,21 +31,16 @@ class InventoryRepository(
     // --- LÓGICA DE FOTOS (Sincronización) ---
 
     suspend fun guardarFoto(foto: Foto): Long {
-        // Ahora fotoDao.insert(foto) devuelve el Long correctamente
         return fotoDao.insert(foto)
     }
 
-    suspend fun marcarFotoComoSubida(fotoId: Int) {
+    // CORREGIDO: Cambiado de Int a Long para que coincida con la entidad Foto
+    suspend fun marcarFotoComoSubida(fotoId: Long) {
         fotoDao.marcarComoSubida(fotoId)
     }
 
     suspend fun obtenerFotosPendientes(): List<Foto> {
         return fotoDao.obtenerPendientesDeSubida()
-    }
-
-    fun obtenerFotosDeAlbaran(albaranId: Long): Flow<List<Foto>> {
-        // Asegúrate de que el DAO tenga esta función con este nombre exacto
-        return fotoDao.getFotosByAlbaran(albaranId)
     }
 
     suspend fun getConteoFotos(qr: String): Int {

@@ -8,6 +8,13 @@
     android:background="#000000"
     tools:context=".MainActivity">
 
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnBack"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Volver"
+        tools:ignore="MissingConstraints" />
+
     <!-- Vista de la cámara: Ocupa toda la pantalla -->
     <androidx.camera.view.PreviewView
         android:id="@+id/previewView"
@@ -18,10 +25,40 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
-    <!--
-       Se ha eliminado el Button 'btnCapture'.
-       El TextView ahora se ancla al fondo de la pantalla (parent)
-    -->
+    <!-- INDICADOR DE COLA DE SUBIDA (NUEVO) -->
+    <LinearLayout
+        android:id="@+id/layoutSync"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:paddingHorizontal="12dp"
+        android:paddingVertical="8dp"
+        android:layout_margin="16dp"
+        android:background="@drawable/bg_status_sync"
+        android:elevation="6dp"
+        android:gravity="center"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <ImageView
+            android:id="@+id/imgSyncIcon"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:src="@android:drawable/stat_notify_sync"
+            app:tint="#FFFFFF" />
+
+        <TextView
+            android:id="@+id/txtPendientes"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:text="0"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- Texto de resultado inferior -->
     <TextView
         android:id="@+id/txtResultado"
         android:layout_width="0dp"

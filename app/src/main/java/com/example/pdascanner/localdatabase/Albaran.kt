@@ -6,7 +6,7 @@ import androidx.room.PrimaryKey
 @Entity(tableName = "albaranes")
 data class Albaran(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val codigoCliente: String,    // Aquí va el "AC..."
-    val codigoTransporte: String, // Aquí va el "AT..."
+    val codigoCliente: String,    // El "AC"
+    val codigoTransporte: String, // El "AT" <--- Asegúrate de que se llame así
     val fecha: Long = System.currentTimeMillis()
 )

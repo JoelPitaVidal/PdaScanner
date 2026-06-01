@@ -1,11 +1,10 @@
 package com.example.pdascanner.api
 
-import com.example.pdascanner.api.service.ApiService
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 
 object RetrofitClient {
-    private const val BASE_URL = "http://URL de ejemplo"
+    private const val BASE_URL = "http://192.168.29.13:8003"
 
     val instance: ApiService by lazy {
         Retrofit.Builder()

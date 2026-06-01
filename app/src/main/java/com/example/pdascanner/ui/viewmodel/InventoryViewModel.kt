@@ -4,9 +4,11 @@ import android.app.Application
 import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
 import com.example.pdascanner.api.RetrofitClient
+import com.example.pdascanner.api.response.AlbaranResponse // Asegúrate de tener este import
 import com.example.pdascanner.localdatabase.Albaran
 import com.example.pdascanner.localdatabase.Foto
 import com.example.pdascanner.localdatabase.appdatabase.AppDatabase
@@ -26,6 +28,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     private val repository: InventoryRepository = AppDatabase.getDatabase(application).let {
         InventoryRepository(it.albaranDao(), it.fotoDao())
     }
+
+    // Exponemos el LiveData del repositorio para que MainActivity pinte los bultos pendientes
+    val fotosPendientes: LiveData<Int> = repository.fotosPendientes
+
+    // Añadimos este LiveData que faltaba para la respuesta remota del albarán de la API
+    val datosAlbaranActual = MutableLiveData<AlbaranResponse?>()
 
     sealed class ScanState {
         object Idle : ScanState()
@@ -58,8 +66,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
             try {
                 // A. GUARDAR LOCALMENTE
+                // CORREGIDO: Se quita 'albaranId' y se instancia según tu Foto.kt real
                 val nuevaFoto = Foto(
-                    albaranId = 0,
                     nombreFichero = nombreArchivo,
                     qrCodigo = qr,
                     fecha = System.currentTimeMillis(),
@@ -78,7 +86,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                     if (archivo != null) {
                         val exito = subirFotoServidor(archivo, qr, nombreArchivo)
                         if (exito) {
-                            repository.marcarFotoComoSubida(idGenerado.toInt())
+                            // CORREGIDO: Pasamos idGenerado directamente (es Long de origen)
+                            repository.marcarFotoComoSubida(idGenerado)
                         }
                     }
                 }
@@ -88,8 +97,6 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             }
         }
     }
-
-    // ... (Resto de funciones: subirFotoServidor, procesarCodigo, etc. se mantienen igual)
 
     private suspend fun subirFotoServidor(archivo: File, qr: String, nombre: String): Boolean {
         return try {
@@ -107,22 +114,35 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     fun procesarCodigo(codigo: String) {
         val limpio = codigo.trim().uppercase()
         estadoEscaneo.postValue(ScanState.Buscando)
-        when {
-            limpio.startsWith("AT") -> {
-                buscarAlbaranPorTransporte(limpio) { albaran ->
-                    if (albaran != null) estadoEscaneo.postValue(ScanState.Valido(albaran.codigoCliente))
-                    else estadoEscaneo.postValue(ScanState.Error("SIN ASOCIACIÓN: $limpio"))
+
+        // Ejecuta la petición al servidor Python para verificar la existencia del albarán
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val response = RetrofitClient.instance.consultarAlbaran(limpio)
+                if (response.isSuccessful && response.body() != null) {
+                    val albaranInfo = response.body()!!
+                    withContext(Dispatchers.Main) {
+                        datosAlbaranActual.value = albaranInfo
+                        if (albaranInfo.success) {
+                            estadoEscaneo.value = ScanState.Valido(limpio)
+                        } else {
+                            estadoEscaneo.value = ScanState.Error(albaranInfo.message ?: "No existe")
+                        }
+                    }
+                } else {
+                    withContext(Dispatchers.Main) {
+                        Log.e("API_DEB_ERR", "Código HTTP: ${response.code()} | Error crudo: ${response.errorBody()?.string()}")
+
+                        datosAlbaranActual.value = AlbaranResponse(success = false, message = "Error de red", cliente = null, estado = null, fecha_creacion = null, total_bultos = null)
+                        estadoEscaneo.value = ScanState.Error("Error de servidor")
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    datosAlbaranActual.value = AlbaranResponse(success = false, message = e.message, cliente = null, estado = null, fecha_creacion = null, total_bultos = null)
+                    estadoEscaneo.value = ScanState.Error("Sin conexión con el almacén")
                 }
             }
-            limpio.startsWith("AC") -> estadoEscaneo.postValue(ScanState.Valido(limpio))
-            else -> estadoEscaneo.postValue(ScanState.Error("QR NO VÁLIDO (AT/AC)"))
-        }
-    }
-
-    private fun buscarAlbaranPorTransporte(at: String, callback: (Albaran?) -> Unit) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val resultado = repository.obtenerAlbaranPorTransporte(at)
-            withContext(Dispatchers.Main) { callback(resultado) }
         }
     }
 

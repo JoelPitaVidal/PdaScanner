@@ -13,4 +13,7 @@ interface AlbaranDao {
 
     @Query("SELECT * FROM albaranes")
     fun getAllAlbaranes(): Flow<List<Albaran>>
+
+    @Query("SELECT * FROM albaranes WHERE codigoCliente = :codigo OR codigoTransporte = :codigo LIMIT 1")
+    suspend fun buscarAlbaranUniversal(codigo: String): Albaran?
 }

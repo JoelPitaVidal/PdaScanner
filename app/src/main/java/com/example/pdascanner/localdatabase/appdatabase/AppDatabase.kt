@@ -9,8 +9,8 @@ import com.example.pdascanner.localdatabase.FotoDao
 import com.example.pdascanner.localdatabase.Foto
 import com.example.pdascanner.localdatabase.Albaran
 
-// 1. Definimos las entidades y la versión
-@Database(entities = [Albaran::class, Foto::class], version = 3)
+// 1. Definimos las entidades y subimos la versión a 4 por el cambio en Foto.kt
+@Database(entities = [Albaran::class, Foto::class], version = 4, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
 
     // 2. Conectamos los DAOs
@@ -21,14 +21,19 @@ abstract class AppDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
-        // 3. Patrón Singleton para que solo haya una instancia de la BD
+        // 3. Patrón Singleton para que solo haya una instancia de la BD en toda la App
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
                     "pda_scanner_db" // Nombre del archivo de la base de datos
-                ).build()
+                )
+                    // 4. IMPORTANTE: Al eliminar 'albaranId', la BD debe recrearse.
+                    // Esto borrará los datos viejos y aplicará el nuevo diseño de tabla sin errores.
+                    .fallbackToDestructiveMigration()
+                    .build()
+
                 INSTANCE = instance
                 instance
             }

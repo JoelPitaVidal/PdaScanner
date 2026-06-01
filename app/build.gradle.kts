@@ -51,7 +51,7 @@ dependencies {
     // OkHttp para el log de errores de red (opcional pero muy recomendado)
     implementation("com.squareup.okhttp3:logging-interceptor:4.11.0")
     implementation(libs.common)
-
+    implementation("com.google.android.material:material:1.12.0")
     val room_version = "2.8.4"
 
     implementation("androidx.room:room-runtime:$room_version")
