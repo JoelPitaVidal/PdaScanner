@@ -32,4 +32,7 @@ interface FotoDao {
     // Añade esto dentro de tu interfaz FotoDao
     @Query("SELECT COUNT(*) FROM fotos WHERE subida = 0")
     fun observarFotosPendientes(): kotlinx.coroutines.flow.Flow<Int>
+
+    @Query("UPDATE fotos SET subida = 1 WHERE id = :id")
+    suspend fun marcarFotoComoSubida(id: Long)
 }

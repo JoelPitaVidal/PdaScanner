@@ -1,6 +1,7 @@
 package com.example.pdascanner.ui.viewmodel
 
 import android.app.Application
+import android.content.Context
 import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
@@ -8,32 +9,30 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
 import com.example.pdascanner.api.RetrofitClient
-import com.example.pdascanner.api.response.AlbaranResponse // Asegúrate de tener este import
+import com.example.pdascanner.api.response.AlbaranResponse
 import com.example.pdascanner.localdatabase.Albaran
 import com.example.pdascanner.localdatabase.Foto
 import com.example.pdascanner.localdatabase.appdatabase.AppDatabase
 import com.example.pdascanner.localdatabase.repository.InventoryRepository
+import com.example.pdascanner.sesionmanager.SesionManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
-import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 import java.io.FileOutputStream
-
+import java.security.MessageDigest
 class InventoryViewModel(application: Application) : AndroidViewModel(application) {
-
+    private val apiService = RetrofitClient.getInstance(getApplication())
     private val repository: InventoryRepository = AppDatabase.getDatabase(application).let {
         InventoryRepository(it.albaranDao(), it.fotoDao())
     }
 
-    // Exponemos el LiveData del repositorio para que MainActivity pinte los bultos pendientes
     val fotosPendientes: LiveData<Int> = repository.fotosPendientes
-
-    // Añadimos este LiveData que faltaba para la respuesta remota del albarán de la API
     val datosAlbaranActual = MutableLiveData<AlbaranResponse?>()
+    val resultadosBusqueda = MutableLiveData<List<Albaran>>()
 
     sealed class ScanState {
         object Idle : ScanState()
@@ -49,115 +48,142 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val path = getApplication<Application>().filesDir
         val espacioLibreBytes = path.freeSpace
         val mbLibres = espacioLibreBytes / (1024 * 1024)
-
-        Log.d("STORAGE", "Espacio disponible: $mbLibres MB")
-
-        // Retornamos falso si queda menos de 100MB por seguridad
         return mbLibres > 100
     }
 
-    fun procesarCaptura(nombreArchivo: String, qr: String, uri: Uri?) {
+    fun buscarAlbaranesLocales(query: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            // 1. COMPROBACIÓN CRÍTICA DE ESPACIO
-            if (!tieneEspacioSuficiente()) {
-                estadoEscaneo.postValue(ScanState.Error("MEMORIA LLENA: Libera espacio en la PDA"))
-                return@launch
-            }
-
             try {
-                // A. GUARDAR LOCALMENTE
-                // CORREGIDO: Se quita 'albaranId' y se instancia según tu Foto.kt real
-                val nuevaFoto = Foto(
-                    nombreFichero = nombreArchivo,
+                val textoLimpio = "%${query.trim()}%"
+                val lista = repository.buscarAlbaranes(textoLimpio)
+                withContext(Dispatchers.Main) {
+                    resultadosBusqueda.value = lista
+                }
+            } catch (e: Exception) {
+                Log.e("SEARCH_ERROR", "Error: ${e.message}")
+            }
+        }
+    }
+
+    fun procesarCaptura(nombreFichero: String, qr: String, uri: Uri?) {
+        viewModelScope.launch {
+            try {
+                if (!tieneEspacioSuficiente()) {
+                    estadoEscaneo.postValue(ScanState.Error("MEMORIA LLENA"))
+                    return@launch
+                }
+
+                val albaranExistente = repository.obtenerAlbaranUniversal(qr)
+                if (albaranExistente == null) {
+                    // CAMBIO: Se guardaba "DESCONOCIDO", ahora se guarda vacío para no ensuciar la UI
+                    repository.insertarAlbaran(Albaran(codigoCliente = "", codigoTransporte = qr, fecha = System.currentTimeMillis()))
+                }
+
+                val foto = Foto(
+                    nombreFichero = nombreFichero,
                     qrCodigo = qr,
                     fecha = System.currentTimeMillis(),
                     uri = uri?.toString() ?: "",
                     subida = false
                 )
 
-                val idGenerado = repository.guardarFoto(nuevaFoto)
+                val fotoId = repository.guardarFoto(foto)
                 val totalFotos = repository.getConteoFotos(qr)
+                estadoEscaneo.postValue(ScanState.Guardado(nombreFichero, totalFotos, qr))
+                encolarFotoParaSubida(fotoId, foto)
 
-                estadoEscaneo.postValue(ScanState.Guardado(nombreArchivo, totalFotos, qr))
-
-                // B. INTENTAR SUBIDA AL SERVIDOR
-                uri?.let {
-                    val archivo = uriToFile(it)
-                    if (archivo != null) {
-                        val exito = subirFotoServidor(archivo, qr, nombreArchivo)
-                        if (exito) {
-                            // CORREGIDO: Pasamos idGenerado directamente (es Long de origen)
-                            repository.marcarFotoComoSubida(idGenerado)
-                        }
-                    }
-                }
             } catch (e: Exception) {
-                Log.e("PROCESS", "Error: ${e.message}")
-                estadoEscaneo.postValue(ScanState.Error("Error de escritura: ${e.message}"))
+                estadoEscaneo.postValue(ScanState.Error("Error: ${e.message}"))
             }
         }
     }
 
-    private suspend fun subirFotoServidor(archivo: File, qr: String, nombre: String): Boolean {
+    private fun encolarFotoParaSubida(fotoId: Long, foto: Foto) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val archivo = uriToFile(Uri.parse(foto.uri), foto.nombreFichero)
+                if (archivo != null && archivo.exists()) {
+                    val subido = subirFotoServidor(archivo, foto.qrCodigo)
+                    if (subido) {
+                        repository.marcarFotoComoSubida(fotoId)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("ENCOLAR_ERROR", "Error: ${e.message}")
+            }
+        }
+    }
+
+    private suspend fun subirFotoServidor(archivo: File, qr: String): Boolean {
         return try {
+
+            val md5 = calcularMD5(archivo)
+            Log.d("UPLOAD_CHECK", "MD5 del archivo a subir: $md5")
+
             val requestFile = archivo.asRequestBody("image/jpeg".toMediaTypeOrNull())
-            val body = MultipartBody.Part.createFormData("foto", archivo.name, requestFile)
-            val qrBody = qr.toRequestBody("text/plain".toMediaTypeOrNull())
-            val nombreBody = nombre.toRequestBody("text/plain".toMediaTypeOrNull())
-            val response = RetrofitClient.instance.subirImagen(body, qrBody, nombreBody)
-            response.isSuccessful && response.body()?.success == true
+            val body = MultipartBody.Part.createFormData("file", archivo.name, requestFile)
+
+            val userId = SesionManager.getUserId(getApplication())
+
+            val response = apiService.subirFotoAlbaran(
+                codigoAlbaran = qr,
+                usuarioId = userId,
+                file = body
+            )
+
+            response.isSuccessful && (response.body()?.success == true)
+
         } catch (e: Exception) {
+            Log.e("UPLOAD_ERROR", "Excepción al subir foto: ${e.message}")
             false
         }
     }
 
-    fun procesarCodigo(codigo: String) {
-        val limpio = codigo.trim().uppercase()
-        estadoEscaneo.postValue(ScanState.Buscando)
-
-        // Ejecuta la petición al servidor Python para verificar la existencia del albarán
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val response = RetrofitClient.instance.consultarAlbaran(limpio)
-                if (response.isSuccessful && response.body() != null) {
-                    val albaranInfo = response.body()!!
-                    withContext(Dispatchers.Main) {
-                        datosAlbaranActual.value = albaranInfo
-                        if (albaranInfo.success) {
-                            estadoEscaneo.value = ScanState.Valido(limpio)
-                        } else {
-                            estadoEscaneo.value = ScanState.Error(albaranInfo.message ?: "No existe")
-                        }
-                    }
-                } else {
-                    withContext(Dispatchers.Main) {
-                        Log.e("API_DEB_ERR", "Código HTTP: ${response.code()} | Error crudo: ${response.errorBody()?.string()}")
-
-                        datosAlbaranActual.value = AlbaranResponse(success = false, message = "Error de red", cliente = null, estado = null, fecha_creacion = null, total_bultos = null)
-                        estadoEscaneo.value = ScanState.Error("Error de servidor")
-                    }
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    datosAlbaranActual.value = AlbaranResponse(success = false, message = e.message, cliente = null, estado = null, fecha_creacion = null, total_bultos = null)
-                    estadoEscaneo.value = ScanState.Error("Sin conexión con el almacén")
-                }
-            }
-        }
+    fun aceptarCodigoEscaneado(codigo: String) {
+        estadoEscaneo.postValue(ScanState.Valido(codigo.trim().uppercase()))
     }
 
-    private fun uriToFile(uri: Uri): File? {
+    private fun uriToFile(uri: Uri, nombreFichero: String): File? {
         return try {
             val context = getApplication<Application>().applicationContext
+            val file = File(context.cacheDir, nombreFichero)
             val inputStream = context.contentResolver.openInputStream(uri)
-            val file = File(context.cacheDir, "upload_temp.jpg")
-            val outputStream = FileOutputStream(file)
-            inputStream?.copyTo(outputStream)
+            val bitmap = android.graphics.BitmapFactory.decodeStream(inputStream)
             inputStream?.close()
-            outputStream.close()
-            file
-        } catch (e: Exception) {
-            null
+
+            if (bitmap != null) {
+                val outputStream = FileOutputStream(file)
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, outputStream)
+                outputStream.flush()
+                outputStream.close()
+                file
+            } else null
+        } catch (e: Exception) { null }
+    }
+
+    fun sincronizarFotos(context: Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.procesarColaDeSubida(context, apiService)
         }
     }
+
+    fun reiniciarEscaneo() {
+        estadoEscaneo.value = ScanState.Idle
+    }
+
+    private fun calcularMD5(file: File): String {
+        val digest = MessageDigest.getInstance("MD5")
+        val buffer = ByteArray(8192) // Leer en bloques de 8KB
+
+        file.inputStream().use { input ->
+            var bytesRead: Int
+            while (input.read(buffer).also { bytesRead = it } != -1) {
+                digest.update(buffer, 0, bytesRead)
+            }
+        }
+
+        // Convertir los bytes del hash a formato hexadecimal
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
 }

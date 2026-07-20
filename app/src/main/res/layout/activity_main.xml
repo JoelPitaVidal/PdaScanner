@@ -8,24 +8,28 @@
     android:background="#000000"
     tools:context=".MainActivity">
 
-    <com.google.android.material.button.MaterialButton
-        android:id="@+id/btnBack"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Volver"
-        tools:ignore="MissingConstraints" />
-
-    <!-- Vista de la cámara: Ocupa toda la pantalla -->
+    <!-- 1. VISTA DE LA CÁMARA (Siempre de primero para que sirva de fondo de pantalla) -->
     <androidx.camera.view.PreviewView
         android:id="@+id/previewView"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
-    <!-- INDICADOR DE COLA DE SUBIDA (NUEVO) -->
+    <!-- 2. BOTÓN VOLVER (Ahora sí se dibuja encima de la cámara) -->
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnBack"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_margin="16dp"
+        android:text="Volver"
+        app:backgroundTint="@color/rodavigo_red"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
+
+    <!-- 3. INDICADOR DE COLA DE SUBIDA -->
     <LinearLayout
         android:id="@+id/layoutSync"
         android:layout_width="wrap_content"
@@ -58,7 +62,33 @@
             android:textStyle="bold" />
     </LinearLayout>
 
-    <!-- Texto de resultado inferior -->
+    <!-- 4. BOTÓN SUBIR FOTOS (Se apila debajo del indicador de sync en la esquina derecha) -->
+    <Button
+        android:id="@+id/btnSubirFotos"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Subir (0)"
+        app:backgroundTint="@color/rodavigo_red"
+        android:layout_margin="16dp"
+        android:enabled="false"
+        app:layout_constraintTop_toBottomOf="@id/layoutSync"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- 5. BOTÓN DE CAPTURA (Sustituto de gatillo físico, flota sobre el fondo) -->
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnCapturar"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="16dp"
+        android:text="CAPTURAR FOTO"
+        android:textSize="16sp"
+        android:padding="16dp"
+        android:enabled="false"
+        app:layout_constraintBottom_toTopOf="@id/txtResultado"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- 6. TEXTO DE RESULTADO INFERIOR (Con fondo semitransparente oscuro) -->
     <TextView
         android:id="@+id/txtResultado"
         android:layout_width="0dp"

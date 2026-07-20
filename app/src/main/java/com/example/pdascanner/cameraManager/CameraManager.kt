@@ -2,83 +2,122 @@ package com.example.pdascanner.cameraManager
 
 import android.content.ContentValues
 import android.content.Context
+import android.hardware.camera2.CaptureRequest
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageCapture
-import androidx.camera.core.ImageCaptureException
-import androidx.camera.view.CameraController
-import androidx.camera.view.LifecycleCameraController
+import androidx.camera.camera2.interop.Camera2Interop
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
+import androidx.camera.core.*
+import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import com.example.pdascanner.barcodeanalyzer.BarcodeAnalyzer
-import java.text.SimpleDateFormat
-import java.util.Locale
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
-class CameraManager(
-    private val context: Context,
-    private val viewFinder: PreviewView
-) {
-    private val cameraController = LifecycleCameraController(context)
+@OptIn(ExperimentalCamera2Interop::class)
+class CameraManager(private val context: Context, private val viewFinder: PreviewView) {
 
-    fun setupCamera(
-        lifecycleOwner: LifecycleOwner,
-        onBarcodeDetected: (String) -> Unit
-    ) {
-        // 1. Forzar TextureView para que la rotación manual de 180f sea efectiva
-        viewFinder.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-        viewFinder.scaleType = PreviewView.ScaleType.FILL_CENTER
+    private var preview: Preview? = null
+    private var imageCapture: ImageCapture? = null
+    private var imageAnalysis: ImageAnalysis? = null
+    private var cameraProvider: ProcessCameraProvider? = null
+    private val cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
 
-        // 2. Configuración de cámara trasera y casos de uso
-        cameraController.cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-        cameraController.setEnabledUseCases(
-            CameraController.IMAGE_CAPTURE or CameraController.IMAGE_ANALYSIS
-        )
+    private var currentLifecycleOwner: LifecycleOwner? = null
+    private var currentOnBarcodeDetected: ((String) -> Unit)? = null
 
-        // 3. Analizador de códigos de barras (ML Kit)
-        cameraController.setImageAnalysisAnalyzer(
-            ContextCompat.getMainExecutor(context),
-            BarcodeAnalyzer { barcode ->
-                onBarcodeDetected(barcode)
+    @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
+    fun setupCamera(lifecycleOwner: LifecycleOwner, onBarcodeDetected: (String) -> Unit) {
+        this.currentLifecycleOwner = lifecycleOwner
+        this.currentOnBarcodeDetected = onBarcodeDetected
+
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+
+        cameraProviderFuture.addListener({
+            cameraProvider = cameraProviderFuture.get()
+
+            // 1. Configurar vista previa con AUTOENFOQUE CONTINUO (Vital para ver el QR nítido)
+            val previewBuilder = Preview.Builder()
+
+            val camera2PreviewExtender = Camera2Interop.Extender(previewBuilder)
+            camera2PreviewExtender.setCaptureRequestOption(
+                CaptureRequest.CONTROL_AF_MODE,
+                CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+            )
+
+            preview = previewBuilder.build().also {
+                it.setSurfaceProvider(viewFinder.surfaceProvider)
             }
-        )
 
-        // 4. Vincular el controlador a la vista
-        viewFinder.controller = cameraController
+            // 2. Configurar analizador con AUTOENFOQUE CONTINUO
+            val analysisBuilder = ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
 
-        // 5. Aplicar la rotación manual que soluciona el problema del hardware invertido
-        viewFinder.post {
-            viewFinder.scaleX = 1f
-            viewFinder.scaleY = 1f
-            viewFinder.rotation = 180f
-            Log.d("CameraManager", "Rotación de 180° aplicada correctamente.")
-        }
+            val camera2AnalysisExtender = Camera2Interop.Extender(analysisBuilder)
+            camera2AnalysisExtender.setCaptureRequestOption(
+                CaptureRequest.CONTROL_AF_MODE,
+                CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+            )
+
+            imageAnalysis = analysisBuilder.build().also {
+                it.setAnalyzer(cameraExecutor, BarcodeAnalyzer(onBarcodeDetected))
+            }
+
+            // 3. Configurar captura de fotos
+            imageCapture = ImageCapture.Builder()
+                .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                .build()
+
+            activarModoEscaneo()
+
+        }, ContextCompat.getMainExecutor(context))
+    }
+
+    private fun activarModoEscaneo() {
+        val provider = cameraProvider ?: return
+        val lifecycle = currentLifecycleOwner ?: return
+        val prev = preview ?: return
+        val analysis = imageAnalysis ?: return
 
         try {
-            cameraController.bindToLifecycle(lifecycleOwner)
+            provider.unbindAll()
+            provider.bindToLifecycle(
+                lifecycle,
+                CameraSelector.DEFAULT_BACK_CAMERA,
+                prev,
+                analysis
+            )
+            Log.d("CameraManager", "PDA en modo ESCANEO con Autoenfoque Continuo")
         } catch (e: Exception) {
-            Log.e("CameraManager", "Error al vincular Lifecycle: ${e.message}")
+            Log.e("CameraManager", "Error al iniciar modo escaneo: ${e.message}")
         }
     }
 
-    /**
-     * Captura la foto y devuelve tanto el nombre como la URI para futuros envíos a API
-     */
-    fun takePhoto(
-        qrContent: String,
-        onSaved: (String, Uri?) -> Unit,
-        onError: (String) -> Unit
-    ) {
-        val safeName = qrContent
-            .filter { it.isLetterOrDigit() || it == '-' || it == '_' }
-            .ifEmpty { "SCAN" }
+    fun takePhoto(qrContent: String, onSaved: (String, Uri?) -> Unit, onError: (String) -> Unit) {
+        val provider = cameraProvider ?: return
+        val lifecycle = currentLifecycleOwner ?: return
+        val prev = preview ?: return
+        val capture = imageCapture ?: return
 
-        val datePart = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(java.util.Date())
-        val fileName = "${safeName}_$datePart"
+        try {
+            provider.unbindAll()
+            provider.bindToLifecycle(
+                lifecycle,
+                CameraSelector.DEFAULT_BACK_CAMERA,
+                prev,
+                capture
+            )
+        } catch (e: Exception) {
+            onError("Error de hardware al preparar foto: ${e.message}")
+            activarModoEscaneo()
+            return
+        }
 
+        val fileName = "${qrContent}_${System.currentTimeMillis()}"
         val contentValues = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, "$fileName.jpg")
             put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
@@ -93,20 +132,21 @@ class CameraManager(
             contentValues
         ).build()
 
-        cameraController.takePicture(
-            outputOptions,
-            ContextCompat.getMainExecutor(context),
+        capture.takePicture(outputOptions, ContextCompat.getMainExecutor(context),
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    // Devolvemos el nombre y la URI (necesaria para la API)
                     onSaved(fileName, output.savedUri)
+                    activarModoEscaneo()
                 }
-
                 override fun onError(exc: ImageCaptureException) {
-                    Log.e("CameraManager", "Error al capturar: ${exc.message}")
-                    onError("Error en captura: ${exc.message}")
+                    onError(exc.message ?: "Error desconocido")
+                    activarModoEscaneo()
                 }
-            }
-        )
+            })
+    }
+
+    fun unbind() {
+        cameraProvider?.unbindAll()
+        cameraExecutor.shutdown()
     }
 }

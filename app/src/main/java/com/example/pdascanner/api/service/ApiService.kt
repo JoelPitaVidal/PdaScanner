@@ -1,25 +1,42 @@
 package com.example.pdascanner.api
 
 import com.example.pdascanner.api.response.AlbaranResponse
+import com.example.pdascanner.api.response.RespuestaSubida
+import com.example.pdascanner.api.response.UsuarioActivo
 import okhttp3.MultipartBody
-import okhttp3.RequestBody
 import retrofit2.Response
 import retrofit2.http.*
 
+/**
+ * Interfaz de endpoints para comunicación con API_Fotos.
+ */
 interface ApiService {
 
-    //Se cambia @GET con @Path por @Query para coincidir exactamente con albaranes.py
-    @GET("api/consultar-albaran")
+    // ============================================================================
+    // ENDPOINT: CONSULTAR ALBARÁN
+    // ============================================================================
+    @GET("api/consultar-albaran/{qr_codigo}")
     suspend fun consultarAlbaran(
-        @Query("qr_codigo") codigo: String
+        @Path("qr_codigo") codigo: String
     ): Response<AlbaranResponse>
 
-    //Ajustado a la ruta "/api/subir-foto" y parámetros de fotos.py
+    // ============================================================================
+    // ENDPOINT: OBTENER USUARIOS ACTIVOS
+    // ============================================================================
+    // CORREGIDO: Unificado para usar tu clase importada 'UsuarioActivo' y evitar duplicados
+    @GET("api/usuarios/activos")
+    suspend fun obtenerUsuariosActivos(): Response<List<UsuarioActivo>>
+
+    // ============================================================================
+    // ENDPOINT: SUBIR FOTO
+    // ============================================================================
+    // CORREGIDO: Unificado en un solo metodo robusto.
+    // Usamos 'x-user-id' en minúsculas (estándar HTTP) y la data class tipada 'RespuestaSubida'.
     @Multipart
-    @POST("api/subir-foto")
-    suspend fun subirImagen(
-        @Part foto: MultipartBody.Part,
-        @Part("qr_codigo") qr: RequestBody,
-        @Part("fecha") fecha: RequestBody
-    ): Response<com.example.pdascanner.api.response.ApiResponse>
+    @POST("api/fotos/subir")
+    suspend fun subirFotoAlbaran(
+        @Query("codigo") codigoAlbaran: String,
+        @Header("x-user-id") usuarioId: Int,
+        @Part file: MultipartBody.Part
+    ): Response<RespuestaSubida>
 }

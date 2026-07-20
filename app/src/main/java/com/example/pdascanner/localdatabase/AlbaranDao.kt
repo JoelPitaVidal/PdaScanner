@@ -16,4 +16,7 @@ interface AlbaranDao {
 
     @Query("SELECT * FROM albaranes WHERE codigoCliente = :codigo OR codigoTransporte = :codigo LIMIT 1")
     suspend fun buscarAlbaranUniversal(codigo: String): Albaran?
+
+    @Query("SELECT * FROM albaranes WHERE codigoTransporte LIKE :query OR codigoCliente LIKE :query")
+    suspend fun buscarAlbaranes(query: String): List<Albaran>
 }

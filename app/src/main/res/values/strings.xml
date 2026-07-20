@@ -1,3 +1,22 @@
 <resources>
-    <string name="app_name">Fotos Expedición</string>
+    <!-- Copia todas estas líneas y añádelas a tu res/values/strings.xml existente dentro de <resources> -->
+
+    <string name="app_name">Fotos Albaranes</string>
+
+    <!-- HomeActivity -->
+    <string name="btn_camara">CÁMARA</string>
+    <string name="btn_ver_albaranes">VER ALBARANES</string>
+
+    <!-- AlbaranesListActivity -->
+    <string name="btn_volver">Volver</string>
+    <string name="title_albaranes_guardados">ALBARANES GUARDADOS</string>
+    <string name="search_hint">Buscar por código...</string>
+    <string name="no_albaranes">No hay albaranes guardados</string>
+
+    <!-- itemAlbaran placeholders -->
+    <string name="placeholder_at">AT: XXXXXX</string>
+    <string name="placeholder_ac">AC: XXXXXX</string>
+    <string name="placeholder_fotos">0 fotos</string>
+    <string name="placeholder_fecha">01/01/2026 12:00</string>
+    <string name="icon_camera">Icono de cámara</string>
 </resources>

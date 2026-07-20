@@ -1,122 +1,176 @@
 package com.example.pdascanner
 
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.graphics.Color
-import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
+import android.widget.Toast
 import androidx.activity.viewModels
-import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
 import com.example.pdascanner.cameraManager.CameraManager
 import com.example.pdascanner.databinding.ActivityMainBinding
 import com.example.pdascanner.permissionmanager.PermissionManager
+import com.example.pdascanner.sesionmanager.SesionManager
 import com.example.pdascanner.ui.viewmodel.InventoryViewModel
 import com.example.pdascanner.ui.viewmodel.InventoryViewModel.ScanState
+import com.example.pdascanner.ui.viewmodel.LoginActivity
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
 
-    // Usamos ViewBinding para eliminar los findViewById
     private lateinit var binding: ActivityMainBinding
-    private lateinit var cameraManager: CameraManager
-
-    // Kotlin permite inicializar el ViewModel en una línea
+    private var cameraManager: CameraManager? = null
     private val inventoryViewModel: InventoryViewModel by viewModels()
-
     private var lastQr: String? = null
-    private var isProcessing: Boolean = false
 
-    @RequiresApi(Build.VERSION_CODES.O)
+    // Flag para saber si la cámara ya se configuró
+    private var isCameraInitialized = false
+
+    @Volatile private var isProcessing: Boolean = false
+    @Volatile private var isScanPaused: Boolean = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        val userId = SesionManager.getUserId(this)
+        if (userId == null || userId == -1) {
+            irALogin()
+            return
+        }
+
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
-
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-        cameraManager = CameraManager(this, binding.previewView)
 
+        cameraManager = CameraManager(this, binding.previewView)
         setupObservers()
+
+        binding.btnCapturar.setOnClickListener { ejecutarCaptura() }
+        binding.btnBack.setOnClickListener { finish() }
+        binding.btnSubirFotos.setOnClickListener { sincronizarFotos() }
+        binding.txtResultado.setOnClickListener { reestablecerEscaner() }
+
+        // Iniciamos el flujo aquí
         checkPermissions()
     }
 
-    @RequiresApi(Build.VERSION_CODES.O)
-    private fun setupObservers() {
-        inventoryViewModel.estadoEscaneo.observe(this) { estado ->
-            when (estado) {
-                is ScanState.Buscando -> actualizarUI("Buscando...", Color.BLUE, true)
-                is ScanState.Valido -> {
-                    lastQr = estado.codigo
-                    actualizarUI("LISTO: ${estado.codigo}", Color.parseColor("#4CAF50"), false)
-                    vibrar(100)
-                }
-                is ScanState.Error -> {
-                    lastQr = null
-                    actualizarUI(estado.mensaje, Color.RED, false)
-                }
-                is ScanState.Guardado -> {
-                    // Ahora 'estado' contiene: nombre, totalFotos y qr
-                    val mensaje = "FOTO ${estado.totalFotos} GUARDADA (${estado.qr})"
-                    actualizarUI(mensaje, Color.parseColor("#2E7D32"), false) // Un verde más oscuro
-                    vibrar(50)
-                }
-                else -> {}
-            }
-        }
+    override fun onResume() {
+        super.onResume()
+        // No llamamos a checkPermissions aquí para evitar bucles de reinicio
+        // Si necesitas re-validar permisos, hazlo solo si es necesario
     }
 
-    private fun actualizarUI(msg: String, color: Int, processing: Boolean) {
-        binding.txtResultado.apply {
-            text = msg
-            setBackgroundColor(color)
-        }
-        isProcessing = processing
+    override fun onPause() {
+        super.onPause()
+        cameraManager?.unbind()
+        isCameraInitialized = false // Marcamos que la cámara está "cerrada" al pausar
     }
 
     private fun checkPermissions() {
         val pm = PermissionManager(this)
-        if (pm.allPermissionsGranted()) startFlow() else pm.requestPermissions(10)
+        if (pm.allPermissionsGranted()) {
+            startFlow()
+        } else {
+            pm.requestPermissions(10)
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 10 && PermissionManager(this).allPermissionsGranted()) {
+            startFlow()
+        }
     }
 
     private fun startFlow() {
-        cameraManager.setupCamera(this) { qr ->
-            if (lastQr != qr.trim().uppercase()) inventoryViewModel.procesarCodigo(qr)
+        if (isCameraInitialized) return // Evita múltiples inicializaciones
+
+        cameraManager?.setupCamera(this) { qr ->
+            // Si está pausado (ya encontró un código) o procesando, no hacemos nada
+            if (isScanPaused || isProcessing) return@setupCamera
+
+            val limpio = qr.trim().uppercase()
+            runOnUiThread {
+                inventoryViewModel.aceptarCodigoEscaneado(limpio)
+            }
         }
+        isCameraInitialized = true
     }
 
     private fun ejecutarCaptura() {
-        val qr = lastQr ?: return
-        if (isProcessing) return
+        val qrParaCapturar = lastQr
+        if (isProcessing || qrParaCapturar == null) return
 
-        actualizarUI("PROCESANDO...", Color.YELLOW, true)
+        isProcessing = true
+        actualizarUI("PROCESANDO FOTO...", Color.parseColor("#F57C00"), true)
 
-        cameraManager.takePhoto(qr, { name, uri ->
-            // Solo llamamos a procesar. El ViewModel se encarga de
-            // guardar, contar y avisar a la UI cuando termine.
-            inventoryViewModel.procesarCaptura(name, qr, uri)
+        cameraManager?.takePhoto(qrParaCapturar, { name, uri ->
+            inventoryViewModel.procesarCaptura(name, qrParaCapturar, uri)
 
+            runOnUiThread {
+                isProcessing = false
+                // Feedback visual: confirmamos que se guardó
+                // Ya no reseteamos el escáner automáticamente
+                actualizarUI("FOTO GUARDADA. DOC: $qrParaCapturar", Color.parseColor("#2E7D32"), false)
+            }
         }, { err ->
-            inventoryViewModel.estadoEscaneo.postValue(ScanState.Error(err))
+            runOnUiThread {
+                isProcessing = false
+                actualizarUI("ERROR. PULSE AQUÍ PARA RE-ESCANEAR", Color.RED, false)
+            }
         })
     }
 
-    // Extraemos la lógica de detección de gatillos para que sea más legible
-    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        val esGatilloPushed = when (keyCode) {
-            131, 285, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_CAMERA -> true
-            else -> false
-        }
+    private fun reestablecerEscaner() {
+        lastQr = null
+        isProcessing = false
+        isScanPaused = false // Esto permite que el callback de cámara vuelva a pasar el IF
 
-        if (esGatilloPushed && lastQr != null) {
+        inventoryViewModel.reiniciarEscaneo()
+        actualizarUI("ESCANEE UN CÓDIGO", Color.DKGRAY, true)
+    }
+
+    private fun actualizarUI(msg: String, color: Int, processing: Boolean) {
+        binding.txtResultado.text = msg
+        binding.txtResultado.setBackgroundColor(color)
+        binding.btnCapturar.isEnabled = !processing
+    }
+
+    private fun setupObservers() {
+        inventoryViewModel.estadoEscaneo.observe(this) { estado ->
+            if (estado is ScanState.Valido) {
+                isScanPaused = true // Bloqueamos la entrada de nuevos códigos
+                lastQr = estado.codigo
+                actualizarUI("CÓDIGO: ${estado.codigo}", Color.parseColor("#1565C0"), false)
+            } else if (estado is ScanState.Error) {
+                actualizarUI(estado.mensaje, Color.RED, false)
+            }
+        }
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_CAMERA) {
             ejecutarCaptura()
             return true
         }
         return super.onKeyDown(keyCode, event)
     }
 
-    @RequiresApi(Build.VERSION_CODES.O)
-    private fun vibrar(ms: Long) {
-        val v = getSystemService(VIBRATOR_SERVICE) as android.os.Vibrator
-        val effect = android.os.VibrationEffect.createOneShot(ms, android.os.VibrationEffect.DEFAULT_AMPLITUDE)
-        v.vibrate(effect)
+    private fun irALogin() {
+        val intent = Intent(this, LoginActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+        startActivity(intent)
+        finish()
+    }
+
+    private fun sincronizarFotos() {
+        Toast.makeText(this, "Sincronizando fotos...", Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch(Dispatchers.IO) {
+            inventoryViewModel.sincronizarFotos(this@MainActivity)
+        }
     }
 }
